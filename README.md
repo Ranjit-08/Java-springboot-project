@@ -3,7 +3,7 @@
 This guide explains the complete process to build, package, and deploy a Spring Boot backend and a Streamlit frontend on an EC2 instance.
 Includes: Maven build, running JAR, Python virtual environment, systemd service, and environment variables.
 
-📦 1. Build & Package the Spring Boot Backend
+# 📦 1. Build & Package the Spring Boot Backend
 connect the backend server 
  * sudo su -
  * yum install git -y
@@ -22,15 +22,10 @@ target/datastore-0.0.7.jar
 
 📁 2. Move JAR File to /root Directory
 
-Switch to root user:
-
-sudo su -
-
-
 Move your JAR file: 
 go to target dir where the jar file exist 
 
-mv /datastore-0.0.7.jar /root
+mv datastore-0.0.7.jar /root
 
 # 🔧 3. Run the Spring Boot Backend with MySQL RDS
 
@@ -39,6 +34,7 @@ Set the required environment variables and run the app using nohup:
 MYSQL_HOST="jdbc:mysql://database-1.can0ws8oqjny.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
 MYSQL_USERNAME="admin" \
 MYSQL_PASSWORD="Cloud123" \
+
 nohup java -jar /root/datastore-0.0.7.jar > /var/log/app/nohup.out 2>&1 &
 
 ✔ Log directory
@@ -49,9 +45,13 @@ chmod 777 /var/log/app
 ps -ef | grep java
 tail -f /var/log/app/nohup.out
 
-🎨 4. Install Python & Setup Virtual Environment for Frontend
-
-Install Python 3 + pip:
+# 🎨 4. Install Python & Setup Virtual Environment for Frontend
+* sudo su -
+* yum install git -y
+* git clone
+* cd into your repo
+* cd frontend 
+Install Python 3 
 
 sudo dnf install -y python3-pip
 
