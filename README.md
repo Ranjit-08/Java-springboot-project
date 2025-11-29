@@ -202,26 +202,7 @@ Code Quality: SonarQube analysis & Quality Gate
 Deployment: Backend and Frontend automatically deployed
 
 Monitoring: Logs captured in workspace
-        +--------------------+          +----------------+
-        |                    |          |                |
-        |   Jenkins EC2      | --------> | SonarQube EC2  |
-        |  (Java, Maven)     |          |   Port 9000    |
-        |  Pipeline & CI/CD  |          |                |
-        +--------------------+          +----------------+
-                |
-                v
-        +--------------------+
-        |  Spring Boot App    |
-        |   Backend (8084)    |
-        +--------------------+
-                |
-                v
-        +--------------------+
-        | AWS RDS MySQL DB   |
-        |   datastore        |
-        +--------------------+
-                ^
-                |AWS Setup
+   
 # EC2 Instance
 
 Launch EC2 instance (Amazon Linux 2).
