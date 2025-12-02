@@ -10,9 +10,6 @@ env:
   BACKEND_PORT: 8084
   FRONTEND_PORT: 8501
   BACKEND_WAIT_TIMEOUT: 120
-  MYSQL_HOST: "jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
-  MYSQL_USERNAME: "admin"
-  MYSQL_PASSWORD: "database-1"
 
 jobs:
 
@@ -20,11 +17,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout Code
+      # 1️⃣ Checkout code
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Java
+      # 2️⃣ Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -40,6 +37,8 @@ jobs:
         run: |
           mkdir -p deploy
           cp target/${{ env.JAR_NAME }} deploy/
+          echo "✅ Files in deploy folder:"
+          ls -l deploy
 
       # 5️⃣ SonarQube Scan
       - name: SonarQube Scan
@@ -57,7 +56,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Copy JAR to EC2
+      # 1️⃣ Verify deploy folder
+      - name: Verify Deploy Folder
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -l
+          if [ ! -f deploy/${{ env.JAR_NAME }} ]; then
+            echo "❌ JAR not found: deploy/${{ env.JAR_NAME }}"
+            exit 1
+          fi
+          echo "✅ JAR exists: deploy/${{ env.JAR_NAME }}"
+
+      # 2️⃣ Copy Backend JAR to EC2
       - name: Copy Backend JAR to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -66,8 +76,12 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           source: "deploy/${{ env.JAR_NAME }}"
           target: "/home/ec2-user/app/"
+          port: 22
+          timeout: 30s
+          command_timeout: 10m
+          debug: true
 
-      # 2️⃣ Run Backend on EC2
+      # 3️⃣ Start Backend on EC2
       - name: Start Backend on EC2
         uses: appleboy/ssh-action@v1.2.4
         with:
@@ -76,14 +90,14 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             mkdir -p /home/ec2-user/app/logs
-
-            # Remove old JAR if exists
             rm -f /home/ec2-user/app/${JAR_NAME}
-
-            # Stop old backend safely
             pkill -f 'java -jar' || echo "No running backend process found"
 
-            # Start new backend
+            # Hardcoded MySQL credentials
+            MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
+            MYSQL_USERNAME="admin"
+            MYSQL_PASSWORD="database-1"
+
             nohup java -jar /home/ec2-user/app/${JAR_NAME} \
               -Dspring.profiles.active=build \
               -Dspring.datasource.url="${MYSQL_HOST}" \
@@ -105,7 +119,7 @@ jobs:
             done
             echo "✅ Backend is running on port ${BACKEND_PORT}"
 
-      # 3️⃣ Run Frontend on EC2 (Streamlit)
+      # 4️⃣ Run Frontend on EC2 (Streamlit)
       - name: Run Frontend on EC2
         uses: appleboy/ssh-action@v1.2.4
         with:
@@ -125,10 +139,8 @@ jobs:
               source venv/bin/activate
             fi
 
-            # Stop old frontend
             pkill -f 'streamlit' || echo "No running frontend found"
 
-            # Start new frontend
             nohup streamlit run app.py \
               --server.port=${FRONTEND_PORT} \
               --server.address=0.0.0.0 \
