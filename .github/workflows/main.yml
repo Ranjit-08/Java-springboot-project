@@ -29,14 +29,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Clean & Build JAR
+      - name: Build Backend JAR
         run: mvn clean package -DskipTests
 
-      - name: Upload backend JAR
-        uses: actions/upload-artifact@v4
+      - name: Upload Backend Artifact
+        uses: actions/upload-artifact@v3
         with:
           name: backend-app
-          path: target/${{ env.JAR_NAME }}
+          path: target/*.jar
 
   sonar:
     needs: build
@@ -52,21 +52,18 @@ jobs:
           distribution: 'temurin'
 
       - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           mvn clean verify sonar:sonar \
-            -DskipTests \
-            -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -DskipTests
 
   deploy:
     needs: [build, sonar]
     runs-on: ubuntu-latest
     steps:
       - name: Download Backend Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           name: backend-app
           path: .
@@ -79,6 +76,7 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           source: "${{ env.JAR_NAME }}"
           target: "/home/ec2-user/app/"
+          overwrite: true   # ✅ Overwrite existing file
 
       - name: Stop Old Backend on EC2
         uses: appleboy/ssh-action@v1.1.0
@@ -87,16 +85,10 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
-            echo "Checking for existing Spring Boot app..."
-            if pgrep -f ${JAR_NAME} >/dev/null; then
-              echo "Stopping old application..."
-              pkill -f ${JAR_NAME} || true
-              sleep 3
-            else
-              echo "No old application running."
-            fi
+            echo "Stopping old backend..."
+            pkill -f 'java -jar' || true
 
-      - name: Run Backend on EC2
+      - name: Start Backend on EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -125,7 +117,7 @@ jobs:
             done
             echo "✅ Backend running on port ${BACKEND_PORT}"
 
-      - name: Run Frontend (Streamlit) on EC2
+      - name: Start Frontend (Streamlit) on EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -134,6 +126,7 @@ jobs:
           script: |
             echo "Setting up frontend..."
             cd /home/ec2-user/project/frontend
+
             if [ ! -d venv ]; then
               python3 -m venv venv
               source venv/bin/activate
