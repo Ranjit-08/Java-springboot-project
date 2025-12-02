@@ -1,56 +1,50 @@
-name: Full CI-CD Pipeline
-
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
+name: CI-CD Pipeline
 
 env:
-  JAR_NAME: datastore-0.0.7.jar
   BACKEND_PORT: 8084
   FRONTEND_PORT: 8501
+  BACKEND_WAIT_TIMEOUT: 120
+
+  # Hardcoded MySQL Values
   MYSQL_HOST: "jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
   MYSQL_USERNAME: "admin"
   MYSQL_PASSWORD: "database-1"
-  BACKEND_WAIT_TIMEOUT: 120
 
 jobs:
 
+  # --------------------- BUILD ---------------------
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code (SCM)
-        uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Install Java 17
-        uses: actions/setup-java@v3
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Clean
-        run: mvn clean
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
 
-      - name: Build Package
-        run: mvn clean package -Dspring.profiles.active=build
-
-      - name: Upload Artifact
+      - name: Upload backend JAR
         uses: actions/upload-artifact@v3
         with:
           name: backend-app
           path: target/*.jar
 
-
+  # --------------------- SONARQUBE ---------------------
   sonar:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -63,9 +57,9 @@ jobs:
             -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
             -DskipTests
 
-
+  # --------------------- DEPLOY ---------------------
   deploy:
-    needs: [ build, sonar ]
+    needs: [build, sonar]
     runs-on: ubuntu-latest
 
     steps:
@@ -74,18 +68,18 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: backend-app
-          path: backend
+          path: .
 
-      - name: Upload Backend to EC2
-        uses: appleboy/scp-action@v0.1.7
+      - name: Copy JAR to EC2
+        uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
-          source: "backend/*.jar"
-          target: "/home/ec2-user/app/target/"
+          source: "*.jar"
+          target: "/home/ec2-user/app/"
 
-      - name: Run Backend on EC2
+           - name: Start Backend on EC2
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -96,51 +90,24 @@ jobs:
             pkill -f 'java -jar' || true
 
             echo "Starting new backend..."
-            nohup java -jar /home/ec2-user/app/target/*.jar \
+            nohup java -jar /home/ec2-user/app/*.jar \
               -Dspring.profiles.active=build \
               -Dspring.datasource.url="${MYSQL_HOST}" \
               -Dspring.datasource.username="${MYSQL_USERNAME}" \
               -Dspring.datasource.password="${MYSQL_PASSWORD}" \
               --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
-
+            
             echo "Waiting for backend to start..."
             elapsed=0
             while ! nc -z localhost ${BACKEND_PORT}; do
               sleep 5
               elapsed=$((elapsed + 5))
+              echo "Waited $elapsed seconds..."
               if [ $elapsed -ge ${BACKEND_WAIT_TIMEOUT} ]; then
-                echo "Backend failed to start!"
+                echo "❌ Backend failed to start!"
                 exit 1
               fi
-              echo "Waiting... $elapsed seconds"
             done
+
             echo "Backend running on port ${BACKEND_PORT}"
-
-      - name: Run Frontend on EC2
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            echo "Setting up frontend..."
-            cd /home/ec2-user/project/frontend
-
-            if [ ! -d venv ]; then
-              python3 -m venv venv
-              source venv/bin/activate
-              pip install --upgrade pip
-              pip install streamlit
-            else
-              source venv/bin/activate
-            fi
-
-            echo "Starting frontend..."
-            pkill -f 'streamlit' || true
-            nohup streamlit run app.py \
-              --server.port=${FRONTEND_PORT} \
-              --server.address=0.0.0.0 \
-              > /home/ec2-user/app/logs/frontend.out 2>&1 &
-
-            echo "Frontend running on port ${FRONTEND_PORT}"
