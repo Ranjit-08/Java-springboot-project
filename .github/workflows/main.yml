@@ -1,4 +1,4 @@
-name: Full CI-CD Pipeline
+name: Full CI/CD Pipeline
 
 on:
   push:
@@ -18,20 +18,20 @@ env:
 
 jobs:
 
-  # --------------------- BUILD ---------------------
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Clean & Build JAR
+      - name: Build with Maven
         run: mvn clean package -DskipTests
 
       - name: Upload backend JAR
@@ -40,34 +40,31 @@ jobs:
           name: backend-app
           path: target/*.jar
 
-  # --------------------- SONARQUBE ---------------------
   sonar:
     needs: build
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           mvn clean verify sonar:sonar \
-            -DskipTests \
-            -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -DskipTests
 
-  # --------------------- DEPLOY ---------------------
   deploy:
     needs: [build, sonar]
     runs-on: ubuntu-latest
+
     steps:
       - name: Download Backend Artifact
         uses: actions/download-artifact@v4
@@ -75,7 +72,18 @@ jobs:
           name: backend-app
           path: .
 
-      - name: Copy Backend JAR to EC2
+      # Remove old backend JAR (to avoid tar conflict)
+      - name: Remove old backend JAR on EC2
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            rm -f /home/ec2-user/app/${{ env.JAR_NAME }}
+            echo "Old backend JAR removed."
+
+      - name: Upload Backend JAR to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -83,19 +91,26 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           source: "*.jar"
           target: "/home/ec2-user/app/"
+          rm: true   # Remove target file if exists before copying
 
-      - name: Stop Old Backend & Run New Backend on EC2
+      - name: Stop old backend
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
-            echo "Stopping any old backend..."
+            echo "Stopping any running backend..."
             pkill -f 'java -jar' || true
 
-            echo "Starting new backend..."
-            nohup java -jar /home/ec2-user/app/*.jar \
+      - name: Start backend on EC2
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            nohup java -jar /home/ec2-user/app/${{ env.JAR_NAME }} \
               -Dspring.profiles.active=build \
               -Dspring.datasource.url="${MYSQL_HOST}" \
               -Dspring.datasource.username="${MYSQL_USERNAME}" \
@@ -116,7 +131,7 @@ jobs:
             done
             echo "✅ Backend running on port ${BACKEND_PORT}"
 
-      - name: Run Frontend (Streamlit) on EC2
+      - name: Setup & Run frontend on EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -135,7 +150,7 @@ jobs:
               source venv/bin/activate
             fi
 
-            echo "Stopping old frontend..."
+            echo "Stopping any running frontend..."
             pkill -f 'streamlit' || true
 
             echo "Starting frontend..."
