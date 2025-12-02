@@ -10,21 +10,18 @@ env:
   BACKEND_PORT: 8084
   FRONTEND_PORT: 8501
   BACKEND_WAIT_TIMEOUT: 120
-
   MYSQL_HOST: "jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
   MYSQL_USERNAME: "admin"
   MYSQL_PASSWORD: "database-1"
 
 jobs:
-
-  build-sonar:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -33,25 +30,35 @@ jobs:
       - name: Build JAR
         run: mvn clean package -DskipTests
 
-      - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          mvn sonar:sonar \
-            -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
-            -DskipTests
-
       - name: Upload Backend JAR
         uses: actions/upload-artifact@v4
         with:
           name: backend-app
-          path: target/${{ env.JAR_NAME }}
+          path: target/*.jar
+
+  sonar:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: SonarQube Scan
+        run: |
+          mvn clean verify sonar:sonar \
+            -Dsonar.host.url=${{ secrets.SONAR_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -DskipTests
 
   deploy:
-    needs: build-sonar
+    needs: [build, sonar]
     runs-on: ubuntu-latest
-
     steps:
       - name: Download Backend Artifact
         uses: actions/download-artifact@v4
@@ -59,17 +66,17 @@ jobs:
           name: backend-app
           path: .
 
-      - name: Upload Backend to EC2
-        uses: appleboy/scp-action@v1.1.0
+      - name: Upload JAR to EC2
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
-          source: "${{ env.JAR_NAME }}"
+          source: "*.jar"
           target: "/home/ec2-user/app/"
 
       - name: Deploy Backend on EC2
-        uses: appleboy/ssh-action@v1.1.0
+        uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
@@ -77,22 +84,15 @@ jobs:
           script: |
             mkdir -p /home/ec2-user/app/logs
 
-            # Remove old JAR safely
-            rm -f /home/ec2-user/app/${JAR_NAME} || true
+            # Remove old JAR if exists
+            rm -f /home/ec2-user/app/${JAR_NAME}
             echo "Old backend JAR removed."
 
             # Stop old backend safely
-            echo "Stopping any running backend..."
             pkill -f 'java -jar' || echo "No running backend process found"
+            echo "Old backend stopped."
 
-            # Check JAR exists
-            if [ ! -f /home/ec2-user/app/${JAR_NAME} ]; then
-              echo "❌ Backend JAR not found! Upload might have failed."
-              exit 1
-            fi
-
-            # Start backend detached
-            echo "Starting backend..."
+            # Start new backend
             nohup java -jar /home/ec2-user/app/${JAR_NAME} \
               -Dspring.profiles.active=build \
               -Dspring.datasource.url="${MYSQL_HOST}" \
@@ -100,9 +100,8 @@ jobs:
               -Dspring.datasource.password="${MYSQL_PASSWORD}" \
               --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
-            disown
 
-            # Wait for backend to be ready
+            # Wait until backend is ready
             elapsed=0
             while ! nc -z localhost ${BACKEND_PORT}; do
               sleep 5
@@ -114,33 +113,3 @@ jobs:
               fi
             done
             echo "✅ Backend is running on port ${BACKEND_PORT}"
-
-      - name: Deploy Frontend on EC2 (Streamlit)
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            mkdir -p /home/ec2-user/app/logs
-            cd /home/ec2-user/project/frontend
-
-            if [ ! -d venv ]; then
-              python3 -m venv venv
-              source venv/bin/activate
-              pip install --upgrade pip
-              pip install streamlit
-            else
-              source venv/bin/activate
-            fi
-
-            echo "Stopping old frontend..."
-            pkill -f 'streamlit' || echo "No running frontend process found"
-
-            echo "Starting frontend..."
-            nohup streamlit run app.py \
-              --server.port=${FRONTEND_PORT} \
-              --server.address=0.0.0.0 \
-              > /home/ec2-user/app/logs/frontend.out 2>&1 &
-            disown
-            echo "✅ Frontend running on port ${FRONTEND_PORT}"
