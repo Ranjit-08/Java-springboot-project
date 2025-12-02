@@ -40,9 +40,9 @@ jobs:
           echo "✅ Files in deploy folder:"
           ls -l deploy
 
-      # 5️⃣ Upload artifact for deploy job
+      # 5️⃣ Upload artifact for deploy job (v4)
       - name: Upload JAR Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: backend-jar
           path: deploy/${{ env.JAR_NAME }}
@@ -63,13 +63,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout code (needed for path consistency)
+      # 1️⃣ Checkout code (optional but keeps path consistency)
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Download artifact from build
+      # 2️⃣ Download artifact from build (v4)
       - name: Download JAR Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: backend-jar
           path: deploy
@@ -124,7 +124,6 @@ jobs:
               --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
 
-            # Wait until backend is ready
             elapsed=0
             while ! nc -z localhost ${BACKEND_PORT}; do
               sleep 5
@@ -160,8 +159,3 @@ jobs:
             pkill -f 'streamlit' || echo "No running frontend found"
 
             nohup streamlit run app.py \
-              --server.port=${FRONTEND_PORT} \
-              --server.address=0.0.0.0 \
-              > /home/ec2-user/app/logs/frontend.out 2>&1 &
-
-            echo "✅ Frontend running on port ${FRONTEND_PORT}"
