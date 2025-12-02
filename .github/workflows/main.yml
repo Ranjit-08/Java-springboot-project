@@ -2,7 +2,7 @@ name: Full CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-deploy:
@@ -29,15 +29,17 @@ jobs:
             -DskipTests \
             -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN}}
 
-
-      # 4️⃣ Quality Gate Check
-      # - name: Quality Gate
-      #   uses: sonarsource/sonarqube-quality-gate-action@v1
-      #   timeout-minutes: 5
-      #   with:
-      #     scanMetadataReportFile: target/site/sonar/report-task.txt
+      # 4️⃣ SonarQube Quality Gate Check
+      - name: SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@v1
+        with:
+          # Path to the sonar report generated in the previous step
+          scanMetadataReportFile: target/sonar/report-task.txt
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        timeout-minutes: 5
 
       # 5️⃣ Build final JAR
       - name: Build JAR
@@ -65,11 +67,10 @@ jobs:
             PID=$(pgrep -f datastore-0.0.7.jar || true)
             if [ -n "$PID" ]; then
                 echo "Stopping existing application with PID: $PID"
-               ### sudo kill -9 $PID || true
+                sudo kill -9 $PID || true
             else
                 echo "No existing application running"
             fi
-
 
       # 8️⃣ Run New Application
       - name: Run Application on EC2
@@ -85,10 +86,11 @@ jobs:
 
             cd /home/ec2-user/app/target
 
-            sudo nohup java -jar datastore-0.0.7.jar \
+            nohup java -jar datastore-0.0.7.jar \
               --MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
               --MYSQL_USERNAME="admin" \
               --MYSQL_PASSWORD="database-1" \
               --LOG_FILE_PATH="/var/log/app/datastore.log" \
               --server.port=8084 > /var/log/app/nohup.out 2>&1 &
+
             echo "🚀 New Application Started"
