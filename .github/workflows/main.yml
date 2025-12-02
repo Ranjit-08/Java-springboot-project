@@ -2,14 +2,14 @@ name: Full CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout SCM
+      # 1️⃣ Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -20,7 +20,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3️⃣ Clean & Package + SonarQube Scan
+      # 3️⃣ Build & SonarQube Scan
       - name: Sonar Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -29,21 +29,13 @@ jobs:
             -DskipTests \
             -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN}}
 
-
-      # 4️⃣ Quality Gate Check
-      # - name: Quality Gate
-      #   uses: sonarsource/sonarqube-quality-gate-action@v1
-      #   timeout-minutes: 5
-      #   with:
-      #     scanMetadataReportFile: target/site/sonar/report-task.txt
-
-      # 5️⃣ Build final JAR
+      # 4️⃣ Build Backend JAR
       - name: Build JAR
         run: mvn clean package -DskipTests=true
 
-      # 6️⃣ Copy JAR to EC2
+      # 5️⃣ Copy Backend JAR to EC2
       - name: Upload JAR to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -53,42 +45,75 @@ jobs:
           source: "target/datastore-0.0.7.jar"
           target: "/home/ec2-user/app/"
 
-      # 7️⃣ Stop Old Application
-      - name: Stop Old Application
-        uses: appleboy/ssh-action@v1.1.0
+      # 6️⃣ Deploy Backend & Frontend
+      - name: Deploy Backend & Frontend on EC2
+        uses: appleboy/ssh-action@v1.2.4
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
-          script_stop: false
           script: |
+            APP_DIR="/home/ec2-user/app"
+            LOG_DIR="/var/log/app"
+            JAR_FILE="${APP_DIR}/datastore-0.0.7.jar"
+            FRONTEND_DIR="${APP_DIR}/frontend"
+            FRONTEND_PORT=8501
+            BACKEND_PORT=8084
+
+            # Ensure log directory exists
+            sudo mkdir -p $LOG_DIR
+            sudo chown ec2-user:ec2-user $LOG_DIR
+            sudo chmod 777 $LOG_DIR
+
+            #######################
+            # Stop old backend
+            #######################
             PID=$(pgrep -f datastore-0.0.7.jar || true)
             if [ -n "$PID" ]; then
-                echo "Stopping existing application with PID: $PID"
-               ### sudo kill -9 $PID || true
+              echo "Stopping existing backend PID: $PID"
+              kill -9 $PID || true
             else
-                echo "No existing application running"
+              echo "No backend running"
             fi
 
-
-      # 8️⃣ Run New Application
-      - name: Run Application on EC2
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            sudo mkdir -p /var/log/app
-            sudo chown ec2-user:ec2-user /var/log/app
-            sudo chmod 777 /var/log/app
-
-            cd /home/ec2-user/app/target
-
-            sudo nohup java -jar datastore-0.0.7.jar \
+            #######################
+            # Start backend
+            #######################
+            nohup java -jar "$JAR_FILE" \
               --MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
               --MYSQL_USERNAME="admin" \
               --MYSQL_PASSWORD="database-1" \
-              --LOG_FILE_PATH="/var/log/app/datastore.log" \
-              --server.port=8084 > /var/log/app/nohup.out 2>&1 &
-            echo "🚀 New Application Started"
+              --LOG_FILE_PATH="$LOG_DIR/datastore.log" \
+              --server.port=$BACKEND_PORT > "$LOG_DIR/backend.out" 2>&1 &
+
+            echo "✅ Backend started on port $BACKEND_PORT"
+
+            #######################
+            # Stop old frontend
+            #######################
+            FRONTEND_PID=$(pgrep -f 'streamlit run' || true)
+            if [ -n "$FRONTEND_PID" ]; then
+              echo "Stopping existing frontend PID: $FRONTEND_PID"
+              kill -9 $FRONTEND_PID || true
+            else
+              echo "No frontend running"
+            fi
+
+            #######################
+            # Start frontend
+            #######################
+            cd $FRONTEND_DIR
+            if [ ! -d venv ]; then
+              python3 -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip
+              pip install streamlit
+            else
+              source venv/bin/activate
+            fi
+
+            nohup streamlit run app.py \
+              --server.port=$FRONTEND_PORT \
+              --server.address=0.0.0.0 > "$LOG_DIR/frontend.out" 2>&1 &
+
+            echo "✅ Frontend started on port $FRONTEND_PORT"
