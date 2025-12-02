@@ -15,6 +15,7 @@ env:
   BACKEND_WAIT_TIMEOUT: 120
 
 jobs:
+
   build:
     runs-on: ubuntu-latest
 
@@ -40,31 +41,35 @@ jobs:
           name: backend-app
           path: target/*.jar
 
+
   sonar:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v3
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: SonarQube Scan
         run: |
-          mvn sonar:sonar \
+          mvn clean verify sonar:sonar \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -DskipTests
+
 
   deploy:
     needs: [ build, sonar ]
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Download Backend Artifact
         uses: actions/download-artifact@v3
         with:
@@ -87,33 +92,32 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
-            echo "Stopping any running backend..."
+            echo "Stopping old backend..."
             pkill -f 'java -jar' || true
 
-            echo "Starting backend..."
+            echo "Starting new backend..."
             nohup java -jar /home/ec2-user/app/target/*.jar \
               -Dspring.profiles.active=build \
-              -Dspring.datasource.url=${{ env.MYSQL_HOST \
-              -Dspring.datasource.username=${{ env.MYSQL_USERNAME }} \
-              -Dspring.datasource.password=${{ env.MYSQL_PASSWORD }} \
-              --server.port=${{ env.BACKEND_PORT }} \
+              -Dspring.datasource.url="${MYSQL_HOST}" \
+              -Dspring.datasource.username="${MYSQL_USERNAME}" \
+              -Dspring.datasource.password="${MYSQL_PASSWORD}" \
+              --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
 
             echo "Waiting for backend to start..."
             elapsed=0
-            while ! nc -z localhost ${{ env.BACKEND_PORT }}; do
+            while ! nc -z localhost ${BACKEND_PORT}; do
               sleep 5
-              elapsed=$((elapsed+5))
-              echo "Waited $elapsed seconds..."
-
-              if [ $elapsed -ge ${{ env.BACKEND_WAIT_TIMEOUT }} ]; then
+              elapsed=$((elapsed + 5))
+              if [ $elapsed -ge ${BACKEND_WAIT_TIMEOUT} ]; then
                 echo "Backend failed to start!"
                 exit 1
               fi
+              echo "Waiting... $elapsed seconds"
             done
-            echo "Backend running on port ${{ env.BACKEND_PORT }}"
+            echo "Backend running on port ${BACKEND_PORT}"
 
-      - name: Run Frontend (Streamlit) on EC2
+      - name: Run Frontend on EC2
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -135,8 +139,8 @@ jobs:
             echo "Starting frontend..."
             pkill -f 'streamlit' || true
             nohup streamlit run app.py \
-              --server.port=${{ env.FRONTEND_PORT }} \
+              --server.port=${FRONTEND_PORT} \
               --server.address=0.0.0.0 \
               > /home/ec2-user/app/logs/frontend.out 2>&1 &
 
-            echo "Frontend started on port ${{ env.FRONTEND_PORT }}"
+            echo "Frontend running on port ${FRONTEND_PORT}"
