@@ -1,11 +1,16 @@
 name: CI-CD Pipeline
 
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
 env:
   BACKEND_PORT: 8084
   FRONTEND_PORT: 8501
   BACKEND_WAIT_TIMEOUT: 120
 
-  # Hardcoded MySQL Values
+  # Hardcoded MySQL
   MYSQL_HOST: "jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
   MYSQL_USERNAME: "admin"
   MYSQL_PASSWORD: "database-1"
@@ -79,7 +84,7 @@ jobs:
           source: "*.jar"
           target: "/home/ec2-user/app/"
 
-           - name: Start Backend on EC2
+      - name: Start Backend on EC2
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -97,7 +102,7 @@ jobs:
               -Dspring.datasource.password="${MYSQL_PASSWORD}" \
               --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
-            
+
             echo "Waiting for backend to start..."
             elapsed=0
             while ! nc -z localhost ${BACKEND_PORT}; do
@@ -111,3 +116,31 @@ jobs:
             done
 
             echo "Backend running on port ${BACKEND_PORT}"
+
+      - name: Run Frontend on EC2
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            echo "Setting up frontend..."
+            cd /home/ec2-user/project/frontend
+
+            if [ ! -d venv ]; then
+              python3 -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip
+              pip install streamlit
+            else
+              source venv/bin/activate
+            fi
+
+            echo "Starting frontend..."
+            pkill -f 'streamlit' || true
+            nohup streamlit run app.py \
+              --server.port=${FRONTEND_PORT} \
+              --server.address=0.0.0.0 \
+              > /home/ec2-user/app/logs/frontend.out 2>&1 &
+
+            echo "Frontend running on port ${FRONTEND_PORT}"
