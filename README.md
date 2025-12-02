@@ -434,4 +434,4 @@ Frontend	http://<EC2_PUBLIC_IP>:8501
 
 - SonarQube issues → Check logs /opt/sonarqube-8.9.6.50800/logs/
 - 
-
+jkfhvadf
