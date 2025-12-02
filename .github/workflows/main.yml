@@ -40,7 +40,14 @@ jobs:
           echo "✅ Files in deploy folder:"
           ls -l deploy
 
-      # 5️⃣ SonarQube Scan
+      # 5️⃣ Upload artifact for deploy job
+      - name: Upload JAR Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-jar
+          path: deploy/${{ env.JAR_NAME }}
+
+      # 6️⃣ SonarQube Scan
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -56,7 +63,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Verify deploy folder
+      # 1️⃣ Checkout code (needed for path consistency)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Download artifact from build
+      - name: Download JAR Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-jar
+          path: deploy
+
+      # 3️⃣ Verify deploy folder
       - name: Verify Deploy Folder
         run: |
           echo "Current directory: $(pwd)"
@@ -67,7 +85,7 @@ jobs:
           fi
           echo "✅ JAR exists: deploy/${{ env.JAR_NAME }}"
 
-      # 2️⃣ Copy Backend JAR to EC2
+      # 4️⃣ Copy Backend JAR to EC2
       - name: Copy Backend JAR to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -81,7 +99,7 @@ jobs:
           command_timeout: 10m
           debug: true
 
-      # 3️⃣ Start Backend on EC2
+      # 5️⃣ Start Backend on EC2
       - name: Start Backend on EC2
         uses: appleboy/ssh-action@v1.2.4
         with:
@@ -119,7 +137,7 @@ jobs:
             done
             echo "✅ Backend is running on port ${BACKEND_PORT}"
 
-      # 4️⃣ Run Frontend on EC2 (Streamlit)
+      # 6️⃣ Run Frontend on EC2 (Streamlit)
       - name: Run Frontend on EC2
         uses: appleboy/ssh-action@v1.2.4
         with:
