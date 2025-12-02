@@ -66,35 +66,35 @@ jobs:
             sudo chmod 777 $LOG_DIR
 
             #######################
-            # Stop old backend
+            # Stop old backend safely
             #######################
-            PID=$(pgrep -f datastore-0.0.7.jar || true)
-            if [ -n "$PID" ]; then
-              echo "Stopping existing backend PID: $PID"
-              kill -9 $PID || true
+            BACKEND_PIDS=$(pgrep -f datastore-0.0.7.jar || true)
+            if [ -n "$BACKEND_PIDS" ]; then
+              echo "Stopping existing backend PIDs: $BACKEND_PIDS"
+              sudo kill -9 $BACKEND_PIDS || echo "Could not kill some PIDs, maybe already stopped"
             else
               echo "No backend running"
             fi
 
             #######################
-            # Start backend
+            # Start backend (as ec2-user)
             #######################
             nohup java -jar "$JAR_FILE" \
-              --MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
+              --MYSQL_HOST="jdbc:mysql://database-1.c7y2sigiw2m6.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
               --MYSQL_USERNAME="admin" \
-              --MYSQL_PASSWORD="database-1" \
+              --MYSQL_PASSWORD="Cloud123" \
               --LOG_FILE_PATH="$LOG_DIR/datastore.log" \
               --server.port=$BACKEND_PORT > "$LOG_DIR/backend.out" 2>&1 &
 
             echo "✅ Backend started on port $BACKEND_PORT"
 
             #######################
-            # Stop old frontend
+            # Stop old frontend safely
             #######################
-            FRONTEND_PID=$(pgrep -f 'streamlit run' || true)
-            if [ -n "$FRONTEND_PID" ]; then
-              echo "Stopping existing frontend PID: $FRONTEND_PID"
-              kill -9 $FRONTEND_PID || true
+            FRONTEND_PIDS=$(pgrep -f 'streamlit run' || true)
+            if [ -n "$FRONTEND_PIDS" ]; then
+              echo "Stopping existing frontend PIDs: $FRONTEND_PIDS"
+              kill -9 $FRONTEND_PIDS || echo "Could not kill some frontend PIDs"
             else
               echo "No frontend running"
             fi
