@@ -2,7 +2,7 @@ name: Full CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 env:
@@ -18,35 +18,48 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      # 1️⃣ Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 2️⃣ Setup Java
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build JAR
-        run: mvn clean package -DskipTests
+      # 3️⃣ Build Backend
+      - name: Build Backend JAR
+        run: mvn clean package -Dspring.profiles.active=build -DskipTests
 
+      # 4️⃣ Prepare Deploy Folder
+      - name: Prepare JAR for Deployment
+        run: |
+          mkdir -p deploy
+          cp target/${{ env.JAR_NAME }} deploy/
+
+      # 5️⃣ SonarQube Scan
       - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           mvn clean verify sonar:sonar \
+            -DskipTests \
+            -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
-            -DskipTests
-
-      - name: Prepare JAR for deploy
-        run: mkdir -p deploy && cp target/${{ env.JAR_NAME }} deploy/
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+
     steps:
-      - name: Copy JAR to EC2
-        uses: appleboy/scp-action@v0.1.7
+      # 1️⃣ Copy JAR to EC2
+      - name: Copy Backend JAR to EC2
+        uses: appleboy/scp-action@v0.1.8
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
@@ -54,8 +67,9 @@ jobs:
           source: "deploy/${{ env.JAR_NAME }}"
           target: "/home/ec2-user/app/"
 
+      # 2️⃣ Run Backend on EC2
       - name: Start Backend on EC2
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
@@ -64,10 +78,7 @@ jobs:
             mkdir -p /home/ec2-user/app/logs
 
             # Remove old JAR if exists
-            if [ -f /home/ec2-user/app/${JAR_NAME} ]; then
-              rm -f /home/ec2-user/app/${JAR_NAME}
-              echo "Old backend JAR removed."
-            fi
+            rm -f /home/ec2-user/app/${JAR_NAME}
 
             # Stop old backend safely
             pkill -f 'java -jar' || echo "No running backend process found"
@@ -92,17 +103,18 @@ jobs:
                 exit 1
               fi
             done
-            echo "✅ Backend running on port ${BACKEND_PORT}"
+            echo "✅ Backend is running on port ${BACKEND_PORT}"
 
-      - name: Start Frontend (Streamlit) on EC2
-        uses: appleboy/ssh-action@v0.1.7
+      # 3️⃣ Run Frontend on EC2 (Streamlit)
+      - name: Run Frontend on EC2
+        uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
             mkdir -p /home/ec2-user/app/logs
-            cd /home/ec2-user/project/frontend
+            cd /home/ec2-user/app/frontend
 
             if [ ! -d venv ]; then
               python3 -m venv venv
@@ -113,7 +125,10 @@ jobs:
               source venv/bin/activate
             fi
 
-            pkill -f 'streamlit' || true
+            # Stop old frontend
+            pkill -f 'streamlit' || echo "No running frontend found"
+
+            # Start new frontend
             nohup streamlit run app.py \
               --server.port=${FRONTEND_PORT} \
               --server.address=0.0.0.0 \
