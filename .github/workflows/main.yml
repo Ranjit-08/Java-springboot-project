@@ -2,22 +2,14 @@ name: Full CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
-  workflow_dispatch:
-
-env:
-  JAR_NAME: datastore-0.0.7.jar
-  BACKEND_PORT: 8084
-  FRONTEND_PORT: 8501
-  BACKEND_WAIT_TIMEOUT: 120
+    branches: [ "main" ]
 
 jobs:
-
-  build:
+  build-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout SCM
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -28,27 +20,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 3️⃣ Build Backend
-      - name: Build Backend JAR
-        run: mvn clean package -Dspring.profiles.active=build -DskipTests
-
-      # 4️⃣ Prepare Deploy Folder
-      - name: Prepare JAR for Deployment
-        run: |
-          mkdir -p deploy
-          cp target/${{ env.JAR_NAME }} deploy/
-          echo "✅ Files in deploy folder:"
-          ls -l deploy
-
-      # 5️⃣ Upload artifact for deploy job (v4)
-      - name: Upload JAR Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-jar
-          path: deploy/${{ env.JAR_NAME }}
-
-      # 6️⃣ SonarQube Scan
-      - name: SonarQube Scan
+      # 3️⃣ Clean & Package + SonarQube Scan
+      - name: Sonar Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
@@ -58,104 +31,64 @@ jobs:
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
 
-    steps:
-      # 1️⃣ Checkout code (optional but keeps path consistency)
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # 4️⃣ Quality Gate Check
+      # - name: Quality Gate
+      #   uses: sonarsource/sonarqube-quality-gate-action@v1
+      #   timeout-minutes: 5
+      #   with:
+      #     scanMetadataReportFile: target/site/sonar/report-task.txt
 
-      # 2️⃣ Download artifact from build (v4)
-      - name: Download JAR Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-jar
-          path: deploy
+      # 5️⃣ Build final JAR
+      - name: Build JAR
+        run: mvn clean package -DskipTests=true
 
-      # 3️⃣ Verify deploy folder
-      - name: Verify Deploy Folder
-        run: |
-          echo "Current directory: $(pwd)"
-          ls -l
-          if [ ! -f deploy/${{ env.JAR_NAME }} ]; then
-            echo "❌ JAR not found: deploy/${{ env.JAR_NAME }}"
-            exit 1
-          fi
-          echo "✅ JAR exists: deploy/${{ env.JAR_NAME }}"
-
-      # 4️⃣ Copy Backend JAR to EC2
-      - name: Copy Backend JAR to EC2
+      # 6️⃣ Copy JAR to EC2
+      - name: Upload JAR to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
-          source: "deploy/${{ env.JAR_NAME }}"
+          source: "target/datastore-0.0.7.jar"
           target: "/home/ec2-user/app/"
-          port: 22
-          timeout: 30s
-          command_timeout: 10m
-          debug: true
 
-      # 5️⃣ Start Backend on EC2
-      - name: Start Backend on EC2
-        uses: appleboy/ssh-action@v1.2.4
+      # 7️⃣ Stop Old Application
+      - name: Stop Old Application
+        uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          script_stop: false
           script: |
-            mkdir -p /home/ec2-user/app/logs
-            rm -f /home/ec2-user/app/${JAR_NAME}
-            pkill -f 'java -jar' || echo "No running backend process found"
-
-            # Hardcoded MySQL credentials
-            MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
-            MYSQL_USERNAME="admin"
-            MYSQL_PASSWORD="database-1"
-
-            nohup java -jar /home/ec2-user/app/${JAR_NAME} \
-              -Dspring.profiles.active=build \
-              -Dspring.datasource.url="${MYSQL_HOST}" \
-              -Dspring.datasource.username="${MYSQL_USERNAME}" \
-              -Dspring.datasource.password="${MYSQL_PASSWORD}" \
-              --server.port=${BACKEND_PORT} \
-              > /home/ec2-user/app/logs/backend.out 2>&1 &
-
-            elapsed=0
-            while ! nc -z localhost ${BACKEND_PORT}; do
-              sleep 5
-              elapsed=$((elapsed+5))
-              echo "Waiting $elapsed seconds for backend..."
-              if [ $elapsed -ge ${BACKEND_WAIT_TIMEOUT} ]; then
-                echo "❌ Backend failed to start!"
-                exit 1
-              fi
-            done
-            echo "✅ Backend is running on port ${BACKEND_PORT}"
-
-      # 6️⃣ Run Frontend on EC2 (Streamlit)
-      - name: Run Frontend on EC2
-        uses: appleboy/ssh-action@v1.2.4
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            mkdir -p /home/ec2-user/app/logs
-            cd /home/ec2-user/app/frontend
-
-            if [ ! -d venv ]; then
-              python3 -m venv venv
-              source venv/bin/activate
-              pip install --upgrade pip
-              pip install streamlit
+            PID=$(pgrep -f datastore-0.0.7.jar || true)
+            if [ -n "$PID" ]; then
+                echo "Stopping existing application with PID: $PID"
+               ### sudo kill -9 $PID || true
             else
-              source venv/bin/activate
+                echo "No existing application running"
             fi
 
-            pkill -f 'streamlit' || echo "No running frontend found"
 
-            nohup streamlit run app.py \
+      # 8️⃣ Run New Application
+      - name: Run Application on EC2
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            sudo mkdir -p /var/log/app
+            sudo chown ec2-user:ec2-user /var/log/app
+            sudo chmod 777 /var/log/app
+
+            cd /home/ec2-user/app/target
+
+            sudo nohup java -jar datastore-0.0.7.jar \
+              --MYSQL_HOST="jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
+              --MYSQL_USERNAME="admin" \
+              --MYSQL_PASSWORD="database-1" \
+              --LOG_FILE_PATH="/var/log/app/datastore.log" \
+              --server.port=8084 > /var/log/app/nohup.out 2>&1 &
+            echo "🚀 New Application Started"
