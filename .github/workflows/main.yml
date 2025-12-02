@@ -11,7 +11,7 @@ env:
   FRONTEND_PORT: 8501
   BACKEND_WAIT_TIMEOUT: 120
 
-  # Hardcoded MySQL Values
+  # Hardcoded MySQL values
   MYSQL_HOST: "jdbc:mysql://database-1.cwv0y4skwfjn.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true"
   MYSQL_USERNAME: "admin"
   MYSQL_PASSWORD: "database-1"
@@ -38,7 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-app
-          path: target/*.jar
+          path: target/${{ env.JAR_NAME }}
 
   sonar:
     needs: build
@@ -57,9 +57,10 @@ jobs:
       - name: SonarQube Scan
         run: |
           mvn clean verify sonar:sonar \
+            -DskipTests \
+            -Dsonar.projectKey=myproject \
             -Dsonar.host.url=${{ secrets.SONAR_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
-            -DskipTests
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
   deploy:
     needs: [build, sonar]
@@ -72,44 +73,22 @@ jobs:
           name: backend-app
           path: .
 
-      # Remove old backend JAR (to avoid tar conflict)
-      - name: Remove old backend JAR on EC2
+      - name: Deploy Backend on EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
+            # Remove old JAR if exists
             rm -f /home/ec2-user/app/${{ env.JAR_NAME }}
             echo "Old backend JAR removed."
 
-      - name: Upload Backend JAR to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          source: "*.jar"
-          target: "/home/ec2-user/app/"
-          rm: true   # Remove target file if exists before copying
-
-      - name: Stop old backend
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            echo "Stopping any running backend..."
+            # Stop old backend process
             pkill -f 'java -jar' || true
+            echo "Old backend stopped."
 
-      - name: Start backend on EC2
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
+            # Start backend
             nohup java -jar /home/ec2-user/app/${{ env.JAR_NAME }} \
               -Dspring.profiles.active=build \
               -Dspring.datasource.url="${MYSQL_HOST}" \
@@ -117,28 +96,16 @@ jobs:
               -Dspring.datasource.password="${MYSQL_PASSWORD}" \
               --server.port=${BACKEND_PORT} \
               > /home/ec2-user/app/logs/backend.out 2>&1 &
+            echo "✅ Backend started on port ${BACKEND_PORT}"
 
-            echo "Waiting for backend to start..."
-            elapsed=0
-            while ! nc -z localhost ${BACKEND_PORT}; do
-              sleep 5
-              elapsed=$((elapsed + 5))
-              echo "Waited $elapsed seconds..."
-              if [ $elapsed -ge ${BACKEND_WAIT_TIMEOUT} ]; then
-                echo "❌ Backend failed to start!"
-                exit 1
-              fi
-            done
-            echo "✅ Backend running on port ${BACKEND_PORT}"
-
-      - name: Setup & Run frontend on EC2
+      - name: Deploy Frontend (Streamlit) on EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
-            echo "Setting up frontend..."
+            mkdir -p /home/ec2-user/app/logs
             cd /home/ec2-user/project/frontend
 
             if [ ! -d venv ]; then
@@ -150,13 +117,9 @@ jobs:
               source venv/bin/activate
             fi
 
-            echo "Stopping any running frontend..."
             pkill -f 'streamlit' || true
-
-            echo "Starting frontend..."
             nohup streamlit run app.py \
               --server.port=${FRONTEND_PORT} \
               --server.address=0.0.0.0 \
               > /home/ec2-user/app/logs/frontend.out 2>&1 &
-
-            echo "✅ Frontend running on port ${FRONTEND_PORT}"
+            echo "✅ Frontend started on port ${FRONTEND_PORT}"
